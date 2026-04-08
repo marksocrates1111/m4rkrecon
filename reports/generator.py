@@ -6,32 +6,97 @@ Generates HTML dashboard + JSON + TXT summary reports.
 import os
 import json
 from datetime import datetime
-from core.utils import read_lines, parse_jsonl, read_json, count_results
+from core.utils import read_lines, parse_jsonl, read_json, count_results, strip_ansi, clean_subdomains
+
+
+def _clean_results(lines: list[str]) -> list[str]:
+    """Strip ANSI codes and filter out Amass graph junk from any result list."""
+    cleaned = []
+    for line in lines:
+        line = strip_ansi(line).strip()
+        if not line:
+            continue
+        # Skip Amass graph data that leaked in
+        if "-->" in line and ("(ASN)" in line or "(Netblock)" in line or "(FQDN)" in line
+                or "(IPAddress)" in line or "(RIROrganization)" in line):
+            continue
+        # Skip lines that are just ANSI garbage
+        if line.startswith("[ ") and "HTTP ERROR" in line:
+            continue
+        cleaned.append(line)
+    return cleaned
+
+
+def _format_nuclei_results(lines: list[str]) -> list[str]:
+    """Convert raw nuclei JSONL lines into human-readable findings."""
+    formatted = []
+    for line in lines:
+        line = strip_ansi(line).strip()
+        if not line:
+            continue
+        # Try to parse as JSON and format nicely
+        try:
+            entry = json.loads(line)
+            name = entry.get("info", {}).get("name", "Unknown")
+            severity = entry.get("info", {}).get("severity", "info").upper()
+            host = entry.get("host", entry.get("matched-at", ""))
+            template_id = entry.get("template-id", "")
+            matcher = entry.get("matcher-name", "")
+
+            parts = [f"[{severity}]", f"{name}"]
+            if matcher:
+                parts.append(f"({matcher})")
+            parts.append(f"- {host}")
+            if template_id:
+                parts.append(f"[{template_id}]")
+
+            formatted.append(" ".join(parts))
+            continue
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+        # Already plain text, just clean it
+        if line:
+            formatted.append(line)
+    return formatted
 
 
 def gather_scan_data(scan_dir: str, domain: str) -> dict:
     """Gather all scan results into a structured dict."""
+
+    # Clean subdomains (filter Amass graph junk)
+    raw_subs = read_lines(os.path.join(scan_dir, "subdomains.txt"))
+    subs = clean_subdomains(raw_subs)
+
+    # Clean live hosts - only keep actual URLs
+    raw_hosts = read_lines(os.path.join(scan_dir, "live_urls.txt"))
+    live_hosts = [h for h in raw_hosts if h.startswith(("http://", "https://")) and "-->" not in h]
+
+    # Format nuclei results from JSON to readable
+    raw_nuclei = read_lines(os.path.join(scan_dir, "nuclei_results.txt"))
+    nuclei_results = _format_nuclei_results(raw_nuclei)
+
     data = {
         "domain": domain,
         "scan_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "scan_dir": scan_dir,
-        "subdomains": read_lines(os.path.join(scan_dir, "subdomains.txt")),
-        "live_hosts": read_lines(os.path.join(scan_dir, "live_urls.txt")),
-        "ports": read_lines(os.path.join(scan_dir, "ports.txt")),
+        "subdomains": subs,
+        "live_hosts": live_hosts,
+        "ports": _clean_results(read_lines(os.path.join(scan_dir, "ports.txt"))),
         "urls": read_lines(os.path.join(scan_dir, "all_urls.txt")),
         "js_secrets": read_lines(os.path.join(scan_dir, "js_secrets.txt")),
         "js_endpoints": read_lines(os.path.join(scan_dir, "js_endpoints.txt")),
         "directories": read_lines(os.path.join(scan_dir, "directories.txt")),
         "parameters": read_lines(os.path.join(scan_dir, "parameters.txt")),
-        "nuclei_results": read_lines(os.path.join(scan_dir, "nuclei_results.txt")),
-        "takeover_results": read_lines(os.path.join(scan_dir, "takeover_results.txt")),
-        "xss_results": read_lines(os.path.join(scan_dir, "xss_results.txt")),
-        "sqli_results": read_lines(os.path.join(scan_dir, "sqli_results.txt")),
-        "cors_results": read_lines(os.path.join(scan_dir, "cors_results.txt")),
-        "redirect_results": read_lines(os.path.join(scan_dir, "redirect_results.txt")),
-        "ssrf_results": read_lines(os.path.join(scan_dir, "ssrf_results.txt")),
-        "ssl_results": read_lines(os.path.join(scan_dir, "ssl_results.txt")),
-        "waf_results": read_lines(os.path.join(scan_dir, "waf_results.txt")),
+        "nuclei_results": nuclei_results,
+        "takeover_results": _clean_results(read_lines(os.path.join(scan_dir, "takeover_results.txt"))),
+        "xss_results": _clean_results(read_lines(os.path.join(scan_dir, "xss_results.txt"))),
+        "sqli_results": _clean_results(read_lines(os.path.join(scan_dir, "sqli_results.txt"))),
+        "cors_results": _clean_results(read_lines(os.path.join(scan_dir, "cors_results.txt"))),
+        "redirect_results": _clean_results(read_lines(os.path.join(scan_dir, "redirect_results.txt"))),
+        "ssrf_results": _clean_results(read_lines(os.path.join(scan_dir, "ssrf_results.txt"))),
+        "ssl_results": _clean_results(read_lines(os.path.join(scan_dir, "ssl_results.txt"))),
+        "waf_results": _clean_results(read_lines(os.path.join(scan_dir, "waf_results.txt"))),
     }
 
     # Parse nuclei JSON if available

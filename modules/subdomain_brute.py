@@ -5,7 +5,7 @@ Tools: shuffledns, puredns
 
 import os
 from core.runner import run_command, tool_exists
-from core.utils import read_lines, merge_files
+from core.utils import read_lines, write_lines, clean_subdomains
 from config import TOOLS, WORDLISTS, DNS_RESOLVERS
 
 
@@ -48,9 +48,11 @@ def run_phase(domain: str, scan_dir: str, logger) -> str:
     brute_file = os.path.join(phase_dir, "shuffledns.txt")
     run_shuffledns(domain, brute_file, logger)
 
-    # Merge with existing subdomains
+    # Merge with existing subdomains, clean junk
     existing_subs = os.path.join(scan_dir, "subdomains.txt")
-    merged = merge_files([existing_subs, brute_file], existing_subs)
+    all_lines = read_lines(existing_subs) + read_lines(brute_file)
+    merged = clean_subdomains(all_lines)
+    write_lines(existing_subs, merged)
 
     logger.phase_end(2, "Subdomain Bruteforce", len(merged))
     return existing_subs

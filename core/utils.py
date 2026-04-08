@@ -93,6 +93,43 @@ def parse_jsonl(filepath: str) -> list[dict]:
     return results
 
 
+def is_valid_subdomain(line: str) -> bool:
+    """Check if a line is a clean subdomain (not Amass graph junk)."""
+    line = line.strip()
+    if not line:
+        return False
+    # Reject Amass graph output: ASN, Netblock, arrows, parentheses
+    if "-->" in line or "(ASN)" in line or "(Netblock)" in line:
+        return False
+    if "(FQDN)" in line or "(IPAddress)" in line or "(RIROrganization)" in line:
+        return False
+    # Reject lines with spaces (graph relationships)
+    if " " in line:
+        return False
+    # Reject bare IPs and CIDR ranges
+    if re.match(r"^\d+\.\d+\.\d+\.\d+(/\d+)?$", line):
+        return False
+    if line.startswith(("2600:", "2606:", "2607:", "2803:", "2a00:", "2a06:")):
+        return False
+    # Must look like a domain
+    if "." not in line:
+        return False
+    # Basic domain character check
+    if not re.match(r"^[a-zA-Z0-9._-]+\.[a-zA-Z]{2,}$", line):
+        return False
+    return True
+
+
+def clean_subdomains(lines: list[str]) -> list[str]:
+    """Filter a list to only valid subdomains, removing Amass graph junk."""
+    return sorted(set(line.strip().lower() for line in lines if is_valid_subdomain(line)))
+
+
+def strip_ansi(text: str) -> str:
+    """Remove ANSI escape codes from text."""
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
+
 def extract_domains_from_urls(urls: list[str]) -> list[str]:
     """Extract unique domains from a list of URLs."""
     domains = set()

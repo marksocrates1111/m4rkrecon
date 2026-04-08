@@ -7,7 +7,7 @@ import os
 import json
 import requests
 from core.runner import run_command, tool_exists
-from core.utils import write_lines, merge_files, read_lines
+from core.utils import write_lines, read_lines, clean_subdomains
 from config import TOOLS, THREADS
 
 
@@ -112,9 +112,13 @@ def run_phase(domain: str, scan_dir: str, logger) -> str:
     run_assetfinder(domain, af_file, logger)
     run_crtsh(domain, ct_file, logger)
 
-    # Merge and dedup
+    # Merge, clean Amass junk, and dedup
     merged_file = os.path.join(scan_dir, "subdomains.txt")
-    all_subs = merge_files([sf_file, am_file, af_file, ct_file], merged_file)
+    all_lines = []
+    for f in [sf_file, am_file, af_file, ct_file]:
+        all_lines.extend(read_lines(f))
+    all_subs = clean_subdomains(all_lines)
+    write_lines(merged_file, all_subs)
 
     logger.phase_end(1, "Subdomain Enumeration", len(all_subs))
     return merged_file
