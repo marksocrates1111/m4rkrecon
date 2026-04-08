@@ -53,20 +53,29 @@ def parse_nuclei_results(json_file: str) -> dict:
     severity_map = {"info": [], "low": [], "medium": [], "high": [], "critical": []}
 
     for entry in entries:
-        sev = entry.get("info", {}).get("severity", "info").lower()
-        finding = {
-            "template": entry.get("template-id", "unknown"),
-            "name": entry.get("info", {}).get("name", ""),
-            "severity": sev,
-            "host": entry.get("host", ""),
-            "matched_at": entry.get("matched-at", ""),
-            "type": entry.get("type", ""),
-            "description": entry.get("info", {}).get("description", ""),
-        }
-        if sev in severity_map:
-            severity_map[sev].append(finding)
-        else:
-            severity_map["info"].append(finding)
+        try:
+            info = entry.get("info", {})
+            if not isinstance(info, dict):
+                info = {}
+            sev = info.get("severity", "info")
+            if not isinstance(sev, str):
+                sev = "info"
+            sev = sev.lower()
+            finding = {
+                "template": entry.get("template-id", "unknown"),
+                "name": info.get("name", ""),
+                "severity": sev,
+                "host": entry.get("host", ""),
+                "matched_at": entry.get("matched-at", ""),
+                "type": entry.get("type", ""),
+                "description": info.get("description", ""),
+            }
+            if sev in severity_map:
+                severity_map[sev].append(finding)
+            else:
+                severity_map["info"].append(finding)
+        except Exception:
+            continue
 
     return severity_map
 

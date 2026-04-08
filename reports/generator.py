@@ -105,9 +105,18 @@ def gather_scan_data(scan_dir: str, domain: str) -> dict:
         entries = parse_jsonl(nuclei_json)
         severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
         for e in entries:
-            sev = e.get("info", {}).get("severity", "info").lower()
-            if sev in severity_counts:
-                severity_counts[sev] += 1
+            try:
+                info = e.get("info", {})
+                if not isinstance(info, dict):
+                    info = {}
+                sev = info.get("severity", "info")
+                if not isinstance(sev, str):
+                    sev = "info"
+                sev = sev.lower()
+                if sev in severity_counts:
+                    severity_counts[sev] += 1
+            except Exception:
+                continue
         data["severity_counts"] = severity_counts
     else:
         data["severity_counts"] = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
