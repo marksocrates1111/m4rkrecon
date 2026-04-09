@@ -70,17 +70,21 @@ def run_phase(domain: str, scan_dir: str, logger) -> str:
     """Run Phase 14: SQL Injection Testing."""
     logger.phase_start(14, "SQL Injection Testing", "sqlmap + ghauri")
 
-    # Find parameterized URLs
+    # Priority: categorized sqli URLs > all parameterized URLs
+    sqli_urls_file = os.path.join(scan_dir, "urls_sqli.txt")
     params_file = os.path.join(scan_dir, "parameters.txt")
-    urls_file = os.path.join(scan_dir, "all_urls.txt")
 
-    source_file = params_file if os.path.isfile(params_file) and read_lines(params_file) else urls_file
-    if not os.path.isfile(source_file):
-        logger.warning("No URLs - skipping SQLi testing")
+    if os.path.isfile(sqli_urls_file) and read_lines(sqli_urls_file):
+        source_file = sqli_urls_file
+        logger.info(f"Using {len(read_lines(source_file))} SQLi-categorized URLs")
+    elif os.path.isfile(params_file) and read_lines(params_file):
+        source_file = params_file
+    else:
+        logger.warning("No parameterized URLs - skipping SQLi testing")
         logger.phase_end(14, "SQLi Testing", 0)
         return ""
 
-    injectable_urls = extract_injectable_urls(source_file, limit=15)
+    injectable_urls = extract_injectable_urls(source_file, limit=20)
     if not injectable_urls:
         logger.info("No parameterized URLs found - skipping SQLi testing")
         logger.phase_end(14, "SQLi Testing", 0)

@@ -119,4 +119,6 @@ TOOLS = {
     "oralyzer": find_tool("oralyzer"),
     "ssrfmap": find_tool("ssrfmap"),
     "kxss": find_tool("kxss"),
+    "uro": find_tool("uro"),
+    "qsreplace": find_tool("qsreplace"),
 }

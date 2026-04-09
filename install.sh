@@ -122,6 +122,7 @@ install_tool "ffuf"         "go install -v github.com/ffuf/ffuf/v2@latest"
 install_tool "gobuster"     "go install -v github.com/OJ/gobuster/v3@latest"
 install_tool "dalfox"       "go install -v github.com/hahwul/dalfox/v2@latest"
 install_tool "kxss"         "go install -v github.com/Emoe/kxss@latest"
+install_tool "qsreplace"   "go install -v github.com/tomnomnom/qsreplace@latest"
 install_tool "subjack"      "go install -v github.com/haccer/subjack@latest"
 install_tool "subzy"        "go install -v github.com/PentestPad/subzy@latest"
 
@@ -143,6 +144,9 @@ success "Python requirements installed"
 
 # wafw00f
 install_tool "wafw00f" "pip3 install -q wafw00f"
+
+# uro (URL deduplication)
+install_tool "uro" "pip3 install -q uro"
 
 # sqlmap
 if [ ! -d "$TOOLS_DIR/sqlmap" ]; then

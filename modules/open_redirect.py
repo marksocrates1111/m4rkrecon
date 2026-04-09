@@ -108,9 +108,17 @@ def run_phase(domain: str, scan_dir: str, logger) -> str:
     """Run Phase 16: Open Redirect Detection."""
     logger.phase_start(16, "Open Redirect Detection", "OpenRedireX / built-in")
 
+    # Priority: categorized redirect URLs > all parameterized > all URLs
+    redir_urls_file = os.path.join(scan_dir, "urls_redirect.txt")
+    params_file = os.path.join(scan_dir, "parameters.txt")
     urls_file = os.path.join(scan_dir, "all_urls.txt")
-    if not os.path.isfile(urls_file):
-        urls_file = os.path.join(scan_dir, "live_urls.txt")
+
+    if os.path.isfile(redir_urls_file) and read_lines(redir_urls_file):
+        urls_file = redir_urls_file
+        logger.info(f"Using {len(read_lines(urls_file))} redirect-categorized URLs")
+    elif os.path.isfile(params_file) and read_lines(params_file):
+        urls_file = params_file
+
     if not os.path.isfile(urls_file):
         logger.warning("No URLs - skipping redirect detection")
         logger.phase_end(16, "Open Redirect", 0)
