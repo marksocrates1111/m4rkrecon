@@ -56,24 +56,30 @@ def run_phase(domain: str, scan_dir: str, logger) -> str:
     """Run Phase 13: XSS Scanning."""
     logger.phase_start(13, "XSS Scanning", "dalfox + kxss")
 
-    # Use parameterized URLs or all URLs
-    urls_file = os.path.join(scan_dir, "parameters.txt")
-    if not os.path.isfile(urls_file) or len(read_lines(urls_file)) == 0:
-        urls_file = os.path.join(scan_dir, "all_urls.txt")
-    if not os.path.isfile(urls_file):
-        logger.warning("No URLs found - skipping XSS scan")
+    # Use parameterized URLs - these are the ones with ?key=value
+    params_file = os.path.join(scan_dir, "parameters.txt")
+    params = read_lines(params_file) if os.path.isfile(params_file) else []
+
+    if not params:
+        logger.warning("No parameterized URLs found - skipping XSS scan")
         logger.phase_end(13, "XSS Scan", 0)
         return ""
 
     phase_dir = os.path.join(scan_dir, "phase13_xss")
     os.makedirs(phase_dir, exist_ok=True)
 
+    # Limit to max 500 unique parameterized URLs for speed
+    scan_urls = params[:500]
+    scan_file = os.path.join(phase_dir, "xss_targets.txt")
+    write_lines(scan_file, scan_urls)
+    logger.info(f"Testing {len(scan_urls)} parameterized URLs for XSS...")
+
     # Pre-filter with kxss if available
     kxss_file = os.path.join(phase_dir, "kxss_reflected.txt")
-    reflected = run_kxss(urls_file, kxss_file, logger)
+    reflected = run_kxss(scan_file, kxss_file, logger)
 
-    # Use reflected URLs if available, otherwise use all URLs
-    scan_input = kxss_file if reflected else urls_file
+    # Use reflected URLs if available, otherwise use param URLs
+    scan_input = kxss_file if reflected else scan_file
 
     # Run dalfox
     xss_file = os.path.join(scan_dir, "xss_results.txt")

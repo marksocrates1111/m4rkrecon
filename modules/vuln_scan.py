@@ -17,33 +17,38 @@ def run_nuclei(input_file: str, output_file: str, json_file: str, logger, severi
         return []
 
     logger.info("Running nuclei vulnerability scanner...")
+
+    # Run with JSONL output to the json_file, plain text to output_file
     cmd = [
         tool,
         "-l", input_file,
         "-o", output_file,
-        "-jsonl", "-je", json_file,
+        "-j",
         "-silent",
         "-c", str(min(THREADS, 25)),
         "-rl", str(RATE_LIMIT),
         "-timeout", "10",
         "-retries", "2",
         "-severity", severity or NUCLEI_SEVERITY,
-        "-stats",
     ]
 
     # Exclude template categories
     for exclude in NUCLEI_TEMPLATES_EXCLUDE:
         cmd.extend(["-etags", exclude])
 
-    rc, stdout, stderr = run_command(cmd, timeout=1800)  # 30 min timeout
+    rc, stdout, stderr = run_command(cmd, timeout=1800)
 
     if rc != 0 and stderr:
-        # Filter out stats/progress lines
         errors = [l for l in stderr.split("\n") if "error" in l.lower()]
         if errors:
             logger.warning(f"nuclei errors: {errors[0][:200]}")
 
+    # The -j flag makes -o write JSONL. Copy it as the json file too.
     results = read_lines(output_file)
+    if results:
+        write_lines(json_file, results)
+
+    logger.found_count("nuclei findings", len(results))
     return results
 
 
