@@ -56,8 +56,8 @@ PROFILES = {
         "phases": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 18, 19, 20],
     },
     "full": {
-        "description": "Everything including XSS, SQLi, SSRF, CORS, redirects",
-        "phases": list(range(1, 21)),
+        "description": "Everything including XSS, SQLi, SSRF, CORS, LFI, CRLF, redirects",
+        "phases": list(range(1, 23)),
     },
     "stealth": {
         "description": "Passive only - no active probing",

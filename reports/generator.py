@@ -97,6 +97,8 @@ def gather_scan_data(scan_dir: str, domain: str) -> dict:
         "ssrf_results": _clean_results(read_lines(os.path.join(scan_dir, "ssrf_results.txt"))),
         "ssl_results": _clean_results(read_lines(os.path.join(scan_dir, "ssl_results.txt"))),
         "waf_results": _clean_results(read_lines(os.path.join(scan_dir, "waf_results.txt"))),
+        "lfi_results": _clean_results(read_lines(os.path.join(scan_dir, "lfi_results.txt"))),
+        "crlf_results": _clean_results(read_lines(os.path.join(scan_dir, "crlf_results.txt"))),
     }
 
     # Parse nuclei JSON if available
@@ -182,6 +184,8 @@ def generate_txt_report(data: dict, output_file: str):
         f"  CORS misconfigs:       {len(data['cors_results'])}",
         f"  Open redirects:        {len(data['redirect_results'])}",
         f"  SSRF candidates:       {len(data['ssrf_results'])}",
+        f"  LFI vulnerabilities:   {len(data.get('lfi_results', []))}",
+        f"  CRLF injections:       {len(data.get('crlf_results', []))}",
         f"  Subdomain takeovers:   {len(data['takeover_results'])}",
         "",
         "TECHNOLOGIES",
@@ -207,6 +211,11 @@ def generate_txt_report(data: dict, output_file: str):
         ("NUCLEI FINDINGS", "nuclei_results"),
         ("XSS FINDINGS", "xss_results"),
         ("SQLI FINDINGS", "sqli_results"),
+        ("SSRF FINDINGS", "ssrf_results"),
+        ("LFI FINDINGS", "lfi_results"),
+        ("CRLF FINDINGS", "crlf_results"),
+        ("CORS MISCONFIGURATIONS", "cors_results"),
+        ("OPEN REDIRECTS", "redirect_results"),
         ("JS SECRETS", "js_secrets"),
         ("SUBDOMAIN TAKEOVERS", "takeover_results"),
     ]:
@@ -245,6 +254,8 @@ def generate_json_report(data: dict, output_file: str):
                 "cors": len(data["cors_results"]),
                 "redirects": len(data["redirect_results"]),
                 "ssrf": len(data["ssrf_results"]),
+                "lfi": len(data.get("lfi_results", [])),
+                "crlf": len(data.get("crlf_results", [])),
                 "takeovers": len(data["takeover_results"]),
             },
             "severity": data["severity_counts"],
@@ -276,6 +287,8 @@ def generate_html_report(data: dict, output_file: str):
         + len(data["cors_results"])
         + len(data["redirect_results"])
         + len(data["ssrf_results"])
+        + len(data.get("lfi_results", []))
+        + len(data.get("crlf_results", []))
         + len(data["takeover_results"])
     )
 

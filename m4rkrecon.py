@@ -51,6 +51,8 @@ from modules import ssrf_scan           # Phase 17
 from modules import ssl_scan            # Phase 18
 from modules import osint_recon         # Phase 19
 from reports import generator           # Phase 20
+from modules import lfi_scan            # Phase 21
+from modules import crlf_scan           # Phase 22
 
 
 # Map phase numbers to modules and names
@@ -75,6 +77,8 @@ PHASE_MAP = {
     18: ("SSL/TLS Analysis",          ssl_scan),
     19: ("OSINT Enrichment",          osint_recon),
     20: ("Report Generation",          generator),
+    21: ("LFI Detection",             lfi_scan),
+    22: ("CRLF Injection Detection",  crlf_scan),
 }
 
 
@@ -168,11 +172,13 @@ def get_phases_to_run(args) -> list[int]:
         if getattr(args, flag_name, False) and phase_num in phases:
             phases.remove(phase_num)
 
-    # Always include report generation
-    if 20 not in phases:
-        phases.append(20)
+    # Report generation (20) must always run LAST
+    if 20 in phases:
+        phases.remove(20)
+    phases = sorted(phases)
+    phases.append(20)
 
-    return sorted(phases)
+    return phases
 
 
 def run_scan(domain: str, args):
