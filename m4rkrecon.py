@@ -92,11 +92,13 @@ Profiles:
 Examples:
   python3 m4rkrecon.py -d example.com
   python3 m4rkrecon.py -d example.com -p full
+  python3 m4rkrecon.py -l targets.txt -p full
   python3 m4rkrecon.py -d example.com --skip-sqli --skip-xss
   python3 m4rkrecon.py -d example.com --phases 1,4,11,20
         """,
     )
     parser.add_argument("-d", "--domain", help="Target domain")
+    parser.add_argument("-l", "--list", help="File containing list of target domains (one per line)")
     parser.add_argument("-p", "--profile", default="standard",
                         choices=["fast", "standard", "full", "stealth"],
                         help="Scan profile (default: standard)")
@@ -323,37 +325,65 @@ def _send_phase_alerts(phase_num: int, scan_dir: str, discord: DiscordNotifier, 
         pass  # Never let Discord errors interrupt the scan
 
 
+def _clean_domain(raw: str) -> str:
+    """Clean a raw domain input string."""
+    d = raw.lower().strip()
+    d = d.replace("https://", "").replace("http://", "").rstrip("/")
+    return d
+
+
 def main():
     print_banner()
     args = parse_args()
 
-    # Get domain
-    domain = args.domain
-    if not domain:
+    domains = []
+
+    # Mode 1: List file (-l targets.txt)
+    if args.list:
+        if not os.path.isfile(args.list):
+            console.print(f"  [error]File not found: {args.list}[/]")
+            sys.exit(1)
+        raw = read_lines(args.list)
+        for line in raw:
+            d = _clean_domain(line)
+            if d and validate_domain(d):
+                domains.append(d)
+        if not domains:
+            console.print("  [error]No valid domains found in file[/]")
+            sys.exit(1)
+        console.print(f"  [bold green]Loaded {len(domains)} targets from {args.list}[/]\n")
+        for i, d in enumerate(domains, 1):
+            console.print(f"    {i}. {d}")
+        console.print()
+
+    # Mode 2: Single domain (-d example.com)
+    elif args.domain:
+        d = _clean_domain(args.domain)
+        if not validate_domain(d):
+            console.print(f"  [error]Invalid domain format: {d}[/]")
+            sys.exit(1)
+        domains = [d]
+        console.print(f"\n  [bold green]Target locked:[/] {d}\n")
+
+    # Mode 3: Interactive prompt
+    else:
         try:
             console.print("  [bold cyan]Enter target domain[/]")
-            domain = input("\n  Target domain: ").strip()
+            raw = input("\n  Target domain: ").strip()
         except (KeyboardInterrupt, EOFError):
             console.print("\n  [dim]Exiting...[/]")
             sys.exit(0)
+        d = _clean_domain(raw)
+        if not d or not validate_domain(d):
+            console.print(f"  [error]Invalid domain: {raw}[/]")
+            sys.exit(1)
+        domains = [d]
+        console.print(f"\n  [bold green]Target locked:[/] {d}\n")
 
-    if not domain:
-        console.print("  [error]No domain provided[/]")
-        sys.exit(1)
-
-    # Clean domain input
-    domain = domain.lower().strip()
-    domain = domain.replace("https://", "").replace("http://", "").rstrip("/")
-
-    if not validate_domain(domain):
-        console.print(f"  [error]Invalid domain format: {domain}[/]")
-        sys.exit(1)
-
-    console.print(f"\n  [bold green]Target locked:[/] {domain}\n")
-
-    # Confirm before starting
+    # Confirm
     try:
-        confirm = input("  Start scan? [Y/n]: ").strip().lower()
+        label = f"{len(domains)} targets" if len(domains) > 1 else domains[0]
+        confirm = input(f"  Start scan on {label}? [Y/n]: ").strip().lower()
         if confirm and confirm != "y":
             console.print("  [dim]Scan cancelled.[/]")
             sys.exit(0)
@@ -362,7 +392,14 @@ def main():
         sys.exit(0)
 
     console.print()
-    run_scan(domain, args)
+
+    # Run scans
+    for i, domain in enumerate(domains, 1):
+        if len(domains) > 1:
+            console.print(f"\n  [bold cyan]{'='*60}[/]")
+            console.print(f"  [bold cyan]  Target {i}/{len(domains)}: {domain}[/]")
+            console.print(f"  [bold cyan]{'='*60}[/]\n")
+        run_scan(domain, args)
 
 
 if __name__ == "__main__":
