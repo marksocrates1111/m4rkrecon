@@ -170,9 +170,31 @@ def run_phase(domain: str, scan_dir: str, logger) -> str:
     nuclei_results = run_nuclei_dast_xss(scan_file, nuclei_xss_file, logger)
     all_xss.extend(nuclei_results)
 
+    # Filter out known false positive patterns
+    verified_xss = []
+    fp_count = 0
+    for finding in set(all_xss):
+        finding_lower = finding.lower()
+        # Next.js _next/image path injection - known dalfox FP on patched Next.js
+        # The payload is in the URL path, not executed as JS
+        if "/_next" in finding_lower and ("/image?" in finding_lower or "/image " in finding_lower):
+            if any(fp in finding_lower for fp in [
+                "/_next;alert", "/_nextalert", "/_next;confirm",
+                "/_nextconfirm", "/_next;prompt", "/_nextprompt",
+                "/_next;print", "/_nextprint", "/_next;parent",
+                "/_nextparent", "/_next;window", "/_nextwindow",
+                "/_next;this", "/_nextthis", "/_next;top", "/_nexttop",
+            ]):
+                fp_count += 1
+                continue
+        verified_xss.append(finding)
+
+    if fp_count > 0:
+        logger.info(f"Filtered {fp_count} Next.js _next/image false positives")
+
     # Write final results
     xss_results_file = os.path.join(scan_dir, "xss_results.txt")
-    write_lines(xss_results_file, sorted(set(all_xss)))
+    write_lines(xss_results_file, sorted(verified_xss))
 
-    logger.phase_end(13, "XSS Scan", len(set(all_xss)))
+    logger.phase_end(13, "XSS Scan", len(verified_xss))
     return xss_results_file

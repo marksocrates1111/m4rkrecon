@@ -11,40 +11,81 @@ from config import TOOLS
 
 
 def run_error_based_check(input_file: str, output_file: str, logger) -> list[str]:
-    """Quick error-based SQLi detection using qsreplace + httpx.
-    One-liner: grep = | qsreplace "' OR '1" | httpx -mr "syntax|mysql|sql"
-    This catches low-hanging fruit FAST before running slow sqlmap."""
-    qsreplace = TOOLS.get("qsreplace", "qsreplace")
-    httpx = TOOLS["httpx"]
+    """Error-based SQLi detection with baseline comparison.
+    Compares response WITH payload vs WITHOUT to find real SQL errors,
+    filtering out HTML templates that contain 'error' in normal responses."""
+    import requests as req
 
-    if not tool_exists(qsreplace) or not tool_exists(httpx):
-        return []
-
-    logger.info("Running error-based SQLi quick check (qsreplace + httpx)...")
     urls = read_lines(input_file)
-    stdin_data = "\n".join(urls)
 
-    # Inject error-triggering payload
-    cmd_qs = [qsreplace, "1' OR '1'='1"]
-    rc, replaced, _ = run_command(cmd_qs, timeout=60, stdin_data=stdin_data)
-    if not replaced:
+    # Filter out known false positive URL patterns
+    skip_patterns = [
+        "/auth/v3/signin", "/hc/", "zendesk", "statuspage",
+        "/latest?no_definitions", "discourse", "/node?page=",
+        "/search?page=", "support.", "status.",
+    ]
+    filtered = []
+    for url in urls:
+        url_lower = url.lower()
+        if not any(sp in url_lower for sp in skip_patterns):
+            filtered.append(url)
+
+    if not filtered:
+        logger.info("No SQLi-testable URLs after filtering known FPs")
         return []
 
-    # Check for SQL error messages in response
-    error_pattern = "syntax|mysql|mariadb|postgresql|sqlite|oracle|sql error|unclosed|unterminated|warning.*mysql|ORA-[0-9]"
-    cmd_httpx = [
-        httpx, "-silent", "-nc", "-mc", "200,500",
-        "-mr", error_pattern,
-        "-t", "20",
-    ]
-    rc, stdout, _ = run_command(cmd_httpx, output_file=output_file, timeout=120, stdin_data=replaced)
+    logger.info(f"Running error-based SQLi check on {len(filtered[:50])} URLs...")
+    findings = []
 
-    results = read_lines(output_file)
-    if results:
-        for r in results[:5]:
-            logger.success(f"  SQL error detected: {r[:80]}")
-    logger.found_count("error-based SQLi candidates", len(results))
-    return results
+    sql_errors = [
+        "you have an error in your sql syntax",
+        "mysql_fetch", "mysql_num_rows", "mysql_query",
+        "pg_query", "pg_exec", "pg_fetch",
+        "ORA-01756", "ORA-00933", "ORA-01747",
+        "SQLite3::query", "sqlite_error",
+        "unclosed quotation mark",
+        "unterminated string",
+        "microsoft sql native client error",
+        "SQLSTATE[",
+        "Warning: mysql",
+        "Warning: pg_",
+        "Warning: SQLite",
+        "MariaDB server version",
+        "PostgreSQL.*ERROR",
+    ]
+
+    for url in filtered[:50]:
+        try:
+            # Baseline: normal response
+            resp_normal = req.get(url, timeout=5, verify=False, allow_redirects=True)
+            normal_text = resp_normal.text.lower()
+
+            # Check if baseline already contains SQL error strings
+            baseline_has_errors = any(e.lower() in normal_text for e in sql_errors)
+
+            # Inject SQLi payload
+            if "=" in url:
+                import re
+                test_url = re.sub(r"=([^&]*)", r"=\1'", url, count=1)
+            else:
+                continue
+
+            resp_test = req.get(test_url, timeout=5, verify=False, allow_redirects=True)
+            test_text = resp_test.text.lower()
+
+            # Only flag if SQL error appears in test but NOT in baseline
+            for error in sql_errors:
+                if error.lower() in test_text and not baseline_has_errors:
+                    findings.append(f"[ERROR-BASED] {url} - matched: {error[:50]}")
+                    logger.success(f"  SQL error: {url[:80]}")
+                    break
+
+        except Exception:
+            continue
+
+    write_lines(output_file, findings)
+    logger.found_count("error-based SQLi (verified)", len(findings))
+    return findings
 
 
 def run_sqlmap(target_url: str, output_dir: str, logger) -> str:

@@ -1,75 +1,121 @@
 """
 Phase 17: SSRF Detection
-Techniques from KingOfBugBountyTips + 0xPugal one-liners.
-Pipeline: gf ssrf → qsreplace collaborator → httpx verify + nuclei DAST
+Fixed: Validates SSRF by comparing response differences, not just HTTP 200.
+Uses baseline comparison to reduce false positives.
 """
 
 import os
 import requests as req
 from core.runner import run_command, tool_exists
 from core.utils import read_lines, write_lines
-from config import TOOLS, THREADS
+from config import TOOLS
+
+# Params that commonly accept URLs (real SSRF vectors)
+SSRF_PARAMS = ["url", "uri", "src", "href", "redirect", "feed", "load",
+               "fetch", "proxy", "img", "image", "callback"]
+
+# Params that are almost always just pagination/tracking (NOT SSRF)
+FALSE_POSITIVE_PARAMS = ["ref", "page", "next", "return_to", "returnTo",
+                         "goto", "continue", "q", "query", "search",
+                         "sort", "order", "limit", "offset", "per_page",
+                         "locale", "lang", "brand_id", "role", "state",
+                         "scope", "response_type", "client_id"]
 
 
-def run_ssrf_qsreplace(input_file: str, output_file: str, logger) -> list[str]:
-    """SSRF check via qsreplace with canary URL.
-    One-liner: cat urls | grep = | qsreplace "http://169.254.169.254" | httpx -mr "ami-id|instance"
-    We use a safe canary instead of actual internal IPs."""
-    qsreplace = TOOLS.get("qsreplace", "qsreplace")
-    httpx = TOOLS["httpx"]
+def _is_likely_ssrf_param(url: str) -> bool:
+    """Check if URL has params that could actually be SSRF vectors,
+    filtering out pagination/tracking params."""
+    url_lower = url.lower()
+    # Must have a real SSRF-like param
+    has_ssrf_param = any(f"{p}=" in url_lower for p in SSRF_PARAMS)
+    if has_ssrf_param:
+        return True
+    # If only has false-positive params, skip
+    has_only_fp = all(
+        any(f"{fp}=" in part.lower() for fp in FALSE_POSITIVE_PARAMS)
+        for part in url.split("?", 1)[1].split("&") if "=" in part
+    ) if "?" in url else False
+    return not has_only_fp
 
-    if not tool_exists(qsreplace) or not tool_exists(httpx):
+
+def run_ssrf_baseline_check(input_file: str, output_file: str, logger) -> list[str]:
+    """SSRF detection with baseline comparison.
+    Compares response with normal value vs SSRF payload to detect actual
+    server-side request behavior (size diff, timing diff, error diff)."""
+    urls = read_lines(input_file)
+    # Filter to only URLs with actual SSRF-likely params
+    ssrf_urls = [u for u in urls if _is_likely_ssrf_param(u)][:100]
+
+    if not ssrf_urls:
+        logger.info("No SSRF-likely parameters found after filtering")
         return []
 
-    logger.info("Running SSRF parameter injection check...")
-    urls = read_lines(input_file)
-    stdin_data = "\n".join(urls)
+    logger.info(f"Testing {len(ssrf_urls)} URLs with SSRF-likely params...")
+    findings = []
 
-    # Test with common SSRF payloads
-    payloads = [
-        "http://127.0.0.1",
-        "http://localhost",
-        "http://0.0.0.0",
-        "http://[::1]",
-    ]
+    for url in ssrf_urls:
+        try:
+            # Baseline: normal request
+            resp_normal = req.get(url, timeout=5, verify=False, allow_redirects=True)
+            normal_size = len(resp_normal.text)
+            normal_status = resp_normal.status_code
 
-    results = []
-    for payload in payloads:
-        cmd_qs = [qsreplace, payload]
-        rc, replaced, _ = run_command(cmd_qs, timeout=30, stdin_data=stdin_data)
-        if not replaced:
+            # Test: replace param values with SSRF payload
+            # Try http://127.0.0.1:80
+            test_url = url
+            for param in SSRF_PARAMS:
+                if f"{param}=" in test_url.lower():
+                    import re
+                    test_url = re.sub(
+                        f"({param})=[^&]*",
+                        f"\\1=http://127.0.0.1:80",
+                        test_url,
+                        flags=re.IGNORECASE,
+                    )
+
+            resp_test = req.get(test_url, timeout=5, verify=False, allow_redirects=True)
+            test_size = len(resp_test.text)
+            test_status = resp_test.status_code
+
+            # Compare: significant difference indicates server processed the URL
+            size_diff = abs(test_size - normal_size)
+            size_ratio = size_diff / max(normal_size, 1)
+
+            if (
+                # Response size changed significantly (>20%)
+                (size_ratio > 0.2 and size_diff > 100)
+                # OR status code changed
+                or (test_status != normal_status)
+                # OR response contains SSRF indicators
+                or any(m in resp_test.text.lower() for m in [
+                    "connection refused", "could not resolve",
+                    "<!doctype html>", "localhost", "127.0.0.1",
+                    "internal server error",
+                ])
+            ):
+                findings.append(
+                    f"[SSRF] {url} - status:{normal_status}->{test_status} "
+                    f"size:{normal_size}->{test_size} ({size_ratio:.0%} diff)"
+                )
+                logger.success(f"  SSRF candidate: {url[:80]}")
+
+        except Exception:
             continue
 
-        # Check for responses indicating SSRF (connection refused = good sign it tried)
-        cmd_httpx = [
-            httpx, "-silent", "-nc",
-            "-mc", "200,301,302,500",
-            "-t", str(min(THREADS, 20)),
-        ]
-        rc, stdout, _ = run_command(cmd_httpx, timeout=60, stdin_data=replaced)
-        if stdout:
-            for line in stdout.strip().split("\n"):
-                if line.strip():
-                    results.append(f"[SSRF-CANDIDATE] {line.strip()} (payload: {payload})")
-
-    unique = sorted(set(results))[:50]
+    unique = sorted(set(findings))
     write_lines(output_file, unique)
-    logger.found_count("SSRF candidates (qsreplace)", len(unique))
+    logger.found_count("SSRF candidates (verified)", len(unique))
     return unique
 
 
 def run_nuclei_ssrf(input_file: str, output_file: str, logger) -> list[str]:
-    """Run nuclei with SSRF + DAST templates."""
+    """Run nuclei with SSRF templates."""
     tool = TOOLS["nuclei"]
     if not tool_exists(tool):
         return []
 
     logger.info("Running nuclei SSRF templates...")
-    cmd = [
-        tool, "-l", input_file,
-        "-tags", "ssrf",
-        "-o", output_file, "-silent", "-rl", "30",
-    ]
+    cmd = [tool, "-l", input_file, "-tags", "ssrf", "-o", output_file, "-silent", "-rl", "30"]
     rc, stdout, stderr = run_command(cmd, timeout=600)
 
     results = read_lines(output_file)
@@ -77,48 +123,15 @@ def run_nuclei_ssrf(input_file: str, output_file: str, logger) -> list[str]:
     return results
 
 
-def check_ssrf_headers(urls_file: str, output_file: str, logger) -> list[str]:
-    """Check for SSRF via header injection (X-Forwarded-For, Referer, etc.).
-    From twseptian/oneliner-bugbounty header injection technique."""
-    logger.info("Checking SSRF via header injection...")
-    urls = read_lines(urls_file)[:30]
-    findings = []
-
-    ssrf_headers = {
-        "X-Forwarded-For": "http://127.0.0.1",
-        "X-Forwarded-Host": "127.0.0.1",
-        "X-Original-URL": "/admin",
-        "X-Rewrite-URL": "/admin",
-        "Referer": "http://127.0.0.1",
-    }
-
-    for url in urls:
-        try:
-            resp = req.get(url, headers=ssrf_headers, timeout=5, verify=False, allow_redirects=False)
-            if resp.status_code in (200, 301, 302) and any(
-                marker in resp.text.lower()
-                for marker in ["admin", "dashboard", "internal", "root:"]
-            ):
-                findings.append(f"[SSRF-HEADER] {url} - status {resp.status_code}")
-        except Exception:
-            continue
-
-    write_lines(output_file, findings)
-    logger.found_count("SSRF via headers", len(findings))
-    return findings
-
-
 def run_phase(domain: str, scan_dir: str, logger) -> str:
-    """Run Phase 17: SSRF Detection - multi-technique."""
-    logger.phase_start(17, "SSRF Detection", "qsreplace + nuclei + header injection")
+    """Run Phase 17: SSRF Detection - with baseline validation."""
+    logger.phase_start(17, "SSRF Detection", "baseline comparison + nuclei")
 
     ssrf_file = os.path.join(scan_dir, "urls_ssrf.txt")
     params_file = os.path.join(scan_dir, "parameters.txt")
-    live_file = os.path.join(scan_dir, "live_urls.txt")
 
     if os.path.isfile(ssrf_file) and read_lines(ssrf_file):
         source = ssrf_file
-        logger.info(f"Using {len(read_lines(source))} SSRF-categorized URLs")
     elif os.path.isfile(params_file) and read_lines(params_file):
         source = params_file
     else:
@@ -131,21 +144,15 @@ def run_phase(domain: str, scan_dir: str, logger) -> str:
 
     all_ssrf = []
 
-    # Technique 1: qsreplace payload injection
-    qs_file = os.path.join(phase_dir, "qsreplace_ssrf.txt")
-    qs_results = run_ssrf_qsreplace(source, qs_file, logger)
-    all_ssrf.extend(qs_results)
+    # Technique 1: Baseline comparison SSRF check
+    baseline_file = os.path.join(phase_dir, "baseline_ssrf.txt")
+    baseline_results = run_ssrf_baseline_check(source, baseline_file, logger)
+    all_ssrf.extend(baseline_results)
 
     # Technique 2: nuclei SSRF templates
     nuclei_file = os.path.join(phase_dir, "nuclei_ssrf.txt")
     nuclei_results = run_nuclei_ssrf(source, nuclei_file, logger)
     all_ssrf.extend(nuclei_results)
-
-    # Technique 3: Header-based SSRF on live hosts
-    if os.path.isfile(live_file):
-        header_file = os.path.join(phase_dir, "header_ssrf.txt")
-        header_results = check_ssrf_headers(live_file, header_file, logger)
-        all_ssrf.extend(header_results)
 
     ssrf_results = os.path.join(scan_dir, "ssrf_results.txt")
     write_lines(ssrf_results, sorted(set(all_ssrf)))
