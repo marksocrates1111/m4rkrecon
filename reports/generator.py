@@ -27,18 +27,26 @@ def _clean_results(lines: list[str]) -> list[str]:
     return cleaned
 
 
-def _format_nuclei_results(lines: list[str]) -> list[str]:
-    """Convert raw nuclei JSONL lines into human-readable findings."""
-    formatted = []
+def _format_nuclei_results(lines: list[str]) -> tuple[list[str], list[str]]:
+    """Convert raw nuclei JSONL lines into human-readable findings.
+    Returns (important_findings, info_findings) - split by severity.
+    Important = low, medium, high, critical. Info = info severity."""
+    important = []
+    info = []
     for line in lines:
         line = strip_ansi(line).strip()
         if not line:
             continue
         # Try to parse as JSON and format nicely
+        severity = "INFO"
+        formatted_line = line
         try:
             entry = json.loads(line)
-            name = entry.get("info", {}).get("name", "Unknown")
-            severity = entry.get("info", {}).get("severity", "info").upper()
+            info_field = entry.get("info", {})
+            if not isinstance(info_field, dict):
+                info_field = {}
+            name = info_field.get("name", "Unknown")
+            severity = info_field.get("severity", "info").upper()
             host = entry.get("host", entry.get("matched-at", ""))
             template_id = entry.get("template-id", "")
             matcher = entry.get("matcher-name", "")
@@ -50,15 +58,20 @@ def _format_nuclei_results(lines: list[str]) -> list[str]:
             if template_id:
                 parts.append(f"[{template_id}]")
 
-            formatted.append(" ".join(parts))
-            continue
+            formatted_line = " ".join(parts)
         except (json.JSONDecodeError, TypeError):
-            pass
+            # Already plain text - check if it starts with [INFO]
+            if line.startswith("[INFO]"):
+                severity = "INFO"
+            elif any(line.startswith(f"[{s}]") for s in ["LOW", "MEDIUM", "HIGH", "CRITICAL"]):
+                severity = line.split("]")[0].strip("[")
 
-        # Already plain text, just clean it
-        if line:
-            formatted.append(line)
-    return formatted
+        if severity == "INFO":
+            info.append(formatted_line)
+        else:
+            important.append(formatted_line)
+
+    return important, info
 
 
 def gather_scan_data(scan_dir: str, domain: str) -> dict:
@@ -72,9 +85,9 @@ def gather_scan_data(scan_dir: str, domain: str) -> dict:
     raw_hosts = read_lines(os.path.join(scan_dir, "live_urls.txt"))
     live_hosts = [h for h in raw_hosts if h.startswith(("http://", "https://")) and "-->" not in h]
 
-    # Format nuclei results from JSON to readable
+    # Format nuclei results - split into important (low/med/high/crit) and info
     raw_nuclei = read_lines(os.path.join(scan_dir, "nuclei_results.txt"))
-    nuclei_results = _format_nuclei_results(raw_nuclei)
+    nuclei_important, nuclei_info = _format_nuclei_results(raw_nuclei)
 
     data = {
         "domain": domain,
@@ -88,7 +101,8 @@ def gather_scan_data(scan_dir: str, domain: str) -> dict:
         "js_endpoints": read_lines(os.path.join(scan_dir, "js_endpoints.txt")),
         "directories": read_lines(os.path.join(scan_dir, "directories.txt")),
         "parameters": read_lines(os.path.join(scan_dir, "parameters.txt")),
-        "nuclei_results": nuclei_results,
+        "nuclei_results": nuclei_important,
+        "nuclei_info": nuclei_info,
         "takeover_results": _clean_results(read_lines(os.path.join(scan_dir, "takeover_results.txt"))),
         "xss_results": _clean_results(read_lines(os.path.join(scan_dir, "xss_results.txt"))),
         "sqli_results": _clean_results(read_lines(os.path.join(scan_dir, "sqli_results.txt"))),
@@ -173,12 +187,12 @@ def generate_txt_report(data: dict, output_file: str):
         "",
         "VULNERABILITIES",
         "-" * 40,
-        f"  Nuclei findings:       {len(data['nuclei_results'])}",
+        f"  Nuclei (important):    {len(data['nuclei_results'])}",
         f"    Critical:            {data['severity_counts']['critical']}",
         f"    High:                {data['severity_counts']['high']}",
         f"    Medium:              {data['severity_counts']['medium']}",
         f"    Low:                 {data['severity_counts']['low']}",
-        f"    Info:                {data['severity_counts']['info']}",
+        f"  Nuclei (info only):    {len(data.get('nuclei_info', []))}",
         f"  XSS vulnerabilities:   {len(data['xss_results'])}",
         f"  SQLi vulnerabilities:  {len(data['sqli_results'])}",
         f"  CORS misconfigs:       {len(data['cors_results'])}",
@@ -207,8 +221,17 @@ def generate_txt_report(data: dict, output_file: str):
         ])
 
     # Top findings
+    # Nuclei: show important findings, just count info
+    important = data.get("nuclei_results", [])
+    info_count = len(data.get("nuclei_info", []))
+    if important:
+        lines.extend(["", "NUCLEI FINDINGS (Low/Medium/High/Critical)", "-" * 40])
+        for item in important:
+            lines.append(f"  {item}")
+    if info_count > 0:
+        lines.extend(["", f"  ({info_count} informational findings hidden - WAF detection, TLS versions, missing headers, etc.)"])
+
     for section_name, key in [
-        ("NUCLEI FINDINGS", "nuclei_results"),
         ("XSS FINDINGS", "xss_results"),
         ("SQLI FINDINGS", "sqli_results"),
         ("SSRF FINDINGS", "ssrf_results"),
